@@ -1,19 +1,27 @@
 {
   "name": "dsh-injection-tune",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
-  "type": "commonjs",
+  "type": "module",
   "description": "DSH host plugin: 在 agent/pre-step 瀑布里按开关精简 runtime-context 冗余、技能目录增量注入与项目指令延迟注入。",
   "main": "lib/index.js",
   "exports": {
-    ".": "./lib/index.js"
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
   },
   "files": [
     "lib",
     "cordis.patch.yml"
   ],
   "dsh": {
-    "manifestVersion": 1
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5",
