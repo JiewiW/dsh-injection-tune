@@ -7,7 +7,7 @@
  *
  * 覆盖：
  *   1. 工具清单按注册来源分框（对照表 / 前缀 / 未识别）；
- *   2. 描述 → 一行功能摘要（去 Markdown、截断）；
+ *   2. 描述 → 完整功能说明（去 Markdown、压成单段、不截断）；
  *   3. 开启后对每个 agent 装 restrict({deny})，关闭后撤销；
  *   4. 未知工具名（已卸载）必须被交集筛掉，绝不把 restrict 打挂；
  *   5. toggle 单条、名单去重。
@@ -47,7 +47,8 @@ class FakeTools {
 }
 
 const AGENT_DEFS = new Map([
-  ['read', { name: 'read', description: 'Read a UTF-8 text file. Use offset/limit to page.', parameters: { type: 'object' } }],
+  // 描述故意超过旧版 58 字符上限：断言完整下发，不补省略号（界面负责换行）。
+  ['read', { name: 'read', description: 'Read a UTF-8 text file. Use offset/limit to page.\n\nPaths are resolved against the workspace root; binary files are rejected.', parameters: { type: 'object' } }],
   ['browser_open', { name: 'browser_open', description: '打开一个浏览器标签页并导航到指定 URL。', parameters: {} }],
   ['memory_note', { name: 'memory_note', description: 'Write a note into long-term memory.', parameters: {} }],
   ['mystery_tool', { name: 'mystery_tool', description: 'Something nobody claims.', parameters: {} }],
@@ -72,7 +73,7 @@ async function createHarness(moduleUrl) {
 
 const MODULE_URL = new URL('../lib/tool-gate.js', import.meta.url).href;
 
-test('按注册来源分框、描述转一行摘要', async () => {
+test('按注册来源分框、描述完整下发（不省略）', async () => {
   isolateHome();
   const { gate } = await createHarness(MODULE_URL);
   try {
@@ -85,8 +86,11 @@ test('按注册来源分框、描述转一行摘要', async () => {
     assert.equal(reasons['未识别来源'], 'none');
 
     const tools = snapshot.groups.flatMap((g) => g.tools);
-    assert.equal(tools.find((t) => t.name === 'read').summary, 'Read a UTF-8 text file.');
-    assert.equal(tools.find((t) => t.name === 'read').critical, true);
+    const read = tools.find((t) => t.name === 'read');
+    // 跨行的 Markdown 正文压成单段，但内容一个字都不许少。
+    assert.equal(read.summary, 'Read a UTF-8 text file. Use offset/limit to page. Paths are resolved against the workspace root; binary files are rejected.');
+    assert.ok(!read.summary.includes('…'), '长描述不得补省略号');
+    assert.equal(read.critical, true);
     assert.equal(tools.find((t) => t.name === 'browser_open').summary, '打开一个浏览器标签页并导航到指定 URL。');
   } finally {
     gate.dispose();
