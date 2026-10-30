@@ -6,17 +6,17 @@
  *   2. AI-2 首次不压缩、变更集才压缩、keepDescription=false 只留名字；
  *   3. AI-3 保留前 N 节、折叠其余节、路径与节标题进指针；
  *   4. host.apply 对三类消息只改 content[0].text、保留 source；
- *   5. host.apply 全 off 时不注册 listener（idle）。
+ *   5. host.apply 全 off 时仍注册 listener（支持设置页热启），但不改写消息。
  */
 
-const test = require('node:test');
-const assert = require('node:assert/strict');
+import test from 'node:test';
+import assert from 'node:assert/strict';
 
-const { dedupeWithinMessage } = require('../lib/features/dedupe-runtime-context.js');
-const { toIncrementalCatalog } = require('../lib/features/incremental-skill-catalog.js');
-const { deferSections } = require('../lib/features/deferred-agent-instructions.js');
-const host = require('../lib/host.js');
-const { resolveConfig } = require('../lib/config.js');
+import { dedupeWithinMessage } from '../lib/features/dedupe-runtime-context.js';
+import { toIncrementalCatalog } from '../lib/features/incremental-skill-catalog.js';
+import { deferSections } from '../lib/features/deferred-agent-instructions.js';
+import * as host from '../lib/host.js';
+import { resolveConfig } from '../lib/config.js';
 
 /** 造一条单 text block 的 user 消息。 */
 function message(text, source) {
@@ -42,6 +42,10 @@ function fakeCtx() {
       debug: (...args) => logs.push(`debug ${args.join(' ')}`),
     },
     on: (name, handler, options) => listeners.push({ name, handler, options }),
+    // AI-4 的门走 ctx.inject；替身里三个服务都不存在，因此回调永不执行 =
+    // 验证「拿不到 tools/agents/webServer 时插件仍能加载」这条降级边界。
+    inject: () => () => {},
+    get: () => undefined,
   };
   return { ctx, listeners, logs };
 }
@@ -149,11 +153,22 @@ test('host rewrites runtime-context text but keeps source', () => {
   });
 });
 
-test('host is idle when all features off', () => {
-  const { ctx, listeners, logs } = fakeCtx();
+test('host registers the listener even when all features are off', () => {
+  // 全关也注册：配置是 volatile 的，设置页热启后要立刻生效，
+  // 提前 dispose 会让热启失效（见 host.js apply 的注释）。
+  const { ctx, listeners } = fakeCtx();
   host.apply(ctx, resolveConfig({}));
-  assert.equal(listeners.length, 0);
-  assert.ok(logs.some((line) => line.includes('all features off')));
+
+  assert.equal(listeners.length, 1);
+  assert.equal(listeners[0].name, 'agent/pre-step');
+
+  const source = { kind: 'runtime-context', form: 'snapshot', sections: [] };
+  const text = `head\n\n${LONG_A}\n\nmid\n\n${LONG_A}\n\ntail`;
+  const outcome = { kind: 'enter', messages: [message(text, source)] };
+  return listeners[0].handler(outcome, async () => outcome).then((result) => {
+    // 三个特性全关：原文一字不改。
+    assert.equal(result.messages[0].content[0].text, text);
+  });
 });
 
 test('host does not rewrite unrelated messages that share a null id', () => {
