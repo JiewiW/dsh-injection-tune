@@ -133,25 +133,31 @@ test('三种数据态都能渲染', () => {
 
 test('勾选语义是激活：deny 里的工具不勾', () => {
   const boxes = checkboxes(render([SNAPSHOT, '', false]).tree);
-  assert.equal(boxes.length, 3, `应有 1 个总开关 + 2 个工具行，实际 ${boxes.length}`);
+  // 1 总开关 + 1 精简开关 + 每工具 2 个（激活 + 豁免）× 2 工具 = 6。
+  assert.equal(boxes.length, 6, `应有 1 总开关 + 1 精简开关 + 2×(激活+豁免)，实际 ${boxes.length}`);
   assert.equal(boxes[0].checked, true, '总开关应勾选');
-  // 默认按名称正序：browser_open（已隐藏）在 read 之前。
-  assert.equal(boxes[1].checked, false, '被隐藏的 browser_open 不应勾选');
-  assert.equal(boxes[2].checked, true, '已激活的 read 应勾选');
+  assert.equal(boxes[1].checked, false, '精简开关默认关闭');
+  // 默认按名称正序：browser_open（已隐藏）在 read 之前；每行先激活框后豁免框。
+  assert.equal(boxes[2].checked, false, '被隐藏的 browser_open 不应勾选');
+  assert.equal(boxes[3].checked, false, '豁免框默认不勾');
+  assert.equal(boxes[4].checked, true, '已激活的 read 应勾选');
+  assert.equal(boxes[5].checked, false, 'read 的豁免框默认不勾');
 });
 
 test('排序只改框内顺序', () => {
   const asc = checkboxes(render([SNAPSHOT, '', false, 'name', false]).tree);
   const desc = checkboxes(render([SNAPSHOT, '', false, 'name', true]).tree);
   const byState = checkboxes(render([SNAPSHOT, '', false, 'state', false]).tree);
-  assert.deepEqual(asc.slice(1).map((b) => b.checked), [false, true], '按名称正序：browser_open, read');
-  assert.deepEqual(desc.slice(1).map((b) => b.checked), [true, false], '按名称倒序应翻转');
-  assert.deepEqual(byState.slice(1).map((b) => b.checked), [true, false], '按激活情况：激活的排前');
+  // 跳过前 2 个（总开关+精简开关），每工具 2 个框，只看激活框（偶数位）。
+  const activeBoxes = (list) => list.slice(2).filter((_, i) => i % 2 === 0).map((b) => b.checked);
+  assert.deepEqual(activeBoxes(asc), [false, true], '按名称正序：browser_open, read');
+  assert.deepEqual(activeBoxes(desc), [true, false], '按名称倒序应翻转');
+  assert.deepEqual(activeBoxes(byState), [true, false], '按激活情况：激活的排前');
 });
 
 test('折叠后不渲染工具行但保留框头', () => {
   const folded = render([SNAPSHOT, '', false, 'name', false, { 'dsh-builtin-browser': true }]);
-  assert.equal(checkboxes(folded.tree).length, 1, '折叠后只剩总开关');
+  assert.equal(checkboxes(folded.tree).length, 2, '折叠后只剩总开关与精简开关');
   assert.ok(folded.text.includes('dsh-builtin-browser'));
   assert.ok(!folded.text.includes('browser_open'), '折叠后不应渲染工具行');
   assert.ok(folded.text.includes('▸'), '折叠时箭头应为 ▸');

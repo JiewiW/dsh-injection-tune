@@ -44,13 +44,18 @@ class FakeTools {
     this.active = filter;
     return () => { this.active = null; };
   }
+  /** 与内核 schemaOf 同语义的单条投影（包装测试的基准）。 */
+  schemaOf(definition) {
+    return { name: definition.name, description: definition.description, parameters: definition.parameters };
+  }
 }
 
 const AGENT_DEFS = new Map([
   // 描述故意超过旧版 58 字符上限：断言完整下发，不补省略号（界面负责换行）。
-  ['read', { name: 'read', description: 'Read a UTF-8 text file. Use offset/limit to page.\n\nPaths are resolved against the workspace root; binary files are rejected.', parameters: { type: 'object' } }],
+  // 四个完整句：精简模式用例需要「多于 3 句」的夹具，3 句会按原样返回。
+  ['read', { name: 'read', description: 'Read a UTF-8 text file. Use offset/limit to page.\n\nPaths are resolved against the workspace root; binary files are rejected. Never read files above the workspace root.', parameters: { type: 'object' } }],
   ['browser_open', { name: 'browser_open', description: '打开一个浏览器标签页并导航到指定 URL。', parameters: {} }],
-  ['memory_note', { name: 'memory_note', description: 'Write a note into long-term memory.', parameters: {} }],
+  ['memory_note', { name: 'memory_note', description: 'Write a note into long-term memory. Notes persist across sessions. Keep each note short. Use tags to group related notes.', parameters: {} }],
   ['mystery_tool', { name: 'mystery_tool', description: 'Something nobody claims.', parameters: {} }],
 ]);
 
@@ -88,7 +93,7 @@ test('按注册来源分框、描述完整下发（不省略）', async () => {
     const tools = snapshot.groups.flatMap((g) => g.tools);
     const read = tools.find((t) => t.name === 'read');
     // 跨行的 Markdown 正文压成单段，但内容一个字都不许少。
-    assert.equal(read.summary, 'Read a UTF-8 text file. Use offset/limit to page. Paths are resolved against the workspace root; binary files are rejected.');
+    assert.equal(read.summary, 'Read a UTF-8 text file. Use offset/limit to page. Paths are resolved against the workspace root; binary files are rejected. Never read files above the workspace root.');
     assert.ok(!read.summary.includes('…'), '长描述不得补省略号');
     assert.equal(read.critical, true);
     assert.equal(tools.find((t) => t.name === 'browser_open').summary, '打开一个浏览器标签页并导航到指定 URL。');
@@ -138,4 +143,75 @@ test('toggle 单条并去重落盘', async () => {
   } finally {
     gate.dispose();
   }
+});
+
+// ── 精简模式（slim）─────────────────────────────────────────────────────────
+
+test('slimDescription：多于 3 句截前 3 句，不足 3 句原样返回', async () => {
+  const { slimDescription } = await import(MODULE_URL);
+  const four = 'First sentence. Second one! Third? Fourth here. Fifth tail.';
+  assert.equal(slimDescription(four), 'First sentence. Second one! Third?');
+  const two = '只有一句。第二句也不少。';
+  assert.equal(slimDescription(two), two);
+  assert.equal(slimDescription(undefined), '');
+  assert.equal(slimDescription(null), '');
+  assert.equal(slimDescription(''), '');
+  assert.equal(slimDescription(four, 2), 'First sentence. Second one!');
+});
+
+test('精简模式：update 落盘、snapshot 回传，schemaOf 投影按状态生效', async () => {
+  isolateHome();
+  const { gate, scopedTools, globalTools } = await createHarness(MODULE_URL);
+  const definition = AGENT_DEFS.get('read');
+  try {
+    // 默认关：投影原样。
+    assert.equal(gate.snapshot().slim, false);
+    assert.equal(scopedTools.schemaOf(definition).description, definition.description);
+
+    const slimOn = gate.update({ slim: true });
+    assert.equal(slimOn.slim, true);
+    // 同一 class 原型：globalTools / scopedTools 共享包装，都生效。
+    const projected = scopedTools.schemaOf(definition);
+    assert.notEqual(projected.description, definition.description);
+    assert.ok(projected.description.length < definition.description.length);
+    assert.ok(!projected.description.includes('Never read files above'), '只保留前 3 句');
+    // 投影是新对象，存储里的 definition 原封不动。
+    assert.equal(definition.description.includes('workspace root'), true);
+    assert.deepEqual(Object.keys(projected).sort(), ['description', 'name', 'parameters'].sort());
+
+    // 豁免：read 恢复完整，其余仍精简。
+    const withExempt = gate.update({ exemptToggle: { name: 'read', exempt: true } });
+    assert.deepEqual(withExempt.exempt, ['read']);
+    assert.equal(scopedTools.schemaOf(definition).description, definition.description);
+    const other = scopedTools.schemaOf(AGENT_DEFS.get('memory_note'));
+    assert.notEqual(other.description, AGENT_DEFS.get('memory_note').description);
+
+    // 豁免可撤销。
+    gate.update({ exemptToggle: { name: 'read', exempt: false } });
+    assert.notEqual(scopedTools.schemaOf(definition).description, definition.description);
+
+    // snapshot 每工具带 slimTokens 与 exempt。
+    const snap = gate.snapshot();
+    const row = snap.groups.flatMap((g) => g.tools).find((t) => t.name === 'read');
+    assert.equal(typeof row.slimTokens, 'number');
+    assert.equal(row.exempt, false);
+
+    // 关掉精简：全体恢复原样；豁免名单保留（下次开启仍生效）。
+    const slimOff = gate.update({ slim: false });
+    assert.equal(slimOff.slim, false);
+    assert.equal(scopedTools.schemaOf(definition).description, definition.description);
+    assert.deepEqual(globalTools === scopedTools, false);
+  } finally {
+    gate.dispose();
+  }
+});
+
+test('dispose 后投影回到透传（精简不再生效）', async () => {
+  isolateHome();
+  const { gate, scopedTools } = await createHarness(MODULE_URL);
+  const definition = AGENT_DEFS.get('read');
+  gate.update({ slim: true });
+  assert.notEqual(scopedTools.schemaOf(definition).description, definition.description);
+  gate.dispose();
+  assert.equal(scopedTools.schemaOf(definition).description, definition.description);
 });
