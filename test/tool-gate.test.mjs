@@ -55,7 +55,7 @@ const AGENT_DEFS = new Map([
   // 四个完整句：精简模式用例需要「多于 3 句」的夹具，3 句会按原样返回。
   ['read', { name: 'read', description: 'Read a UTF-8 text file. Use offset/limit to page.\n\nPaths are resolved against the workspace root; binary files are rejected. Never read files above the workspace root.', parameters: { type: 'object' } }],
   ['browser_open', { name: 'browser_open', description: '打开一个浏览器标签页并导航到指定 URL。', parameters: {} }],
-  ['memory_note', { name: 'memory_note', description: 'Write a note into long-term memory. Notes persist across sessions. Keep each note short. Use tags to group related notes.', parameters: {} }],
+  ['memory_note', { name: 'memory_note', description: 'Write a note into long-term memory. Notes persist across sessions. Keep each note short. Use tags to group related notes. Notes are visible to later sessions through recall.', parameters: {} }],
   ['mystery_tool', { name: 'mystery_tool', description: 'Something nobody claims.', parameters: {} }],
 ]);
 
@@ -147,26 +147,43 @@ test('toggle 单条并去重落盘', async () => {
 
 // ── 精简模式（slim）─────────────────────────────────────────────────────────
 
-test('slimDescription：多于 3 句截前 3 句，不足 3 句原样返回', async () => {
+test('slimDescription：加权裁剪——预算内原样，超预算保纪律句、裁叙述句', async () => {
   const { slimDescription } = await import(MODULE_URL);
   const four = 'First sentence. Second one! Third? Fourth here. Fifth tail.';
-  assert.equal(slimDescription(four), 'First sentence. Second one! Third?');
-  const two = '只有一句。第二句也不少。';
-  assert.equal(slimDescription(two), two);
+  // 全文低于预算 → 原样返回（不引入空格虚胖）。
+  assert.equal(slimDescription(four), four);
+  // 压预算：第 1 句恒留，其余按分装预算。
+  const tight = slimDescription(four, 30);
+  assert.ok(tight.startsWith('First sentence.'), '第 1 句恒留');
+  assert.ok(tight.length <= 30 + 15, '装入预算（允许最后一句整句略超出的空隙由实现决定，这里放宽到一句长）');
   assert.equal(slimDescription(undefined), '');
   assert.equal(slimDescription(null), '');
   assert.equal(slimDescription(''), '');
-  assert.equal(slimDescription(four, 2), 'First sentence. Second one!');
+  // 纪律句加权：never 句优先于普通叙述句。
+  const mixed = 'This tool paints pixels. You must close the file first. Colors look nice.';
+  const picked = slimDescription(mixed, 60);
+  assert.ok(picked.includes('must close the file'), 'must 纪律句应保留');
+  assert.ok(!picked.includes('Colors look nice'), '弱叙述句被裁');
+  // 中文纪律句。
+  const zh = '这个工具用来整理目录。禁止删除系统文件。界面很美观。';
+  const zhPicked = slimDescription(zh, 20);
+  assert.ok(zhPicked.includes('禁止删除系统文件'), '中文禁止句应保留');
 });
 
-test('精简模式：update 落盘、snapshot 回传，schemaOf 投影按状态生效', async () => {
+test('精简模式：预算可调且夹紧，update 落盘、snapshot 回传，schemaOf 投影按状态生效', async () => {
   isolateHome();
   const { gate, scopedTools, globalTools } = await createHarness(MODULE_URL);
   const definition = AGENT_DEFS.get('read');
   try {
     // 默认关：投影原样。
     assert.equal(gate.snapshot().slim, false);
+    assert.equal(gate.snapshot().budget, 320);
     assert.equal(scopedTools.schemaOf(definition).description, definition.description);
+
+    // 预算夹紧：越界回落边界值。
+    assert.equal(gate.update({ budget: 1 }).budget, 80);
+    assert.equal(gate.update({ budget: 99999 }).budget, 4000);
+    assert.equal(gate.update({ budget: 150 }).budget, 150);
 
     const slimOn = gate.update({ slim: true });
     assert.equal(slimOn.slim, true);
@@ -174,7 +191,8 @@ test('精简模式：update 落盘、snapshot 回传，schemaOf 投影按状态�
     const projected = scopedTools.schemaOf(definition);
     assert.notEqual(projected.description, definition.description);
     assert.ok(projected.description.length < definition.description.length);
-    assert.ok(!projected.description.includes('Never read files above'), '只保留前 3 句');
+    assert.ok(projected.description.includes('Never read files above'), 'never 纪律句按权重保留');
+    assert.ok(!projected.description.includes('Use offset/limit'), '无权重叙述句被裁');
     // 投影是新对象，存储里的 definition 原封不动。
     assert.equal(definition.description.includes('workspace root'), true);
     assert.deepEqual(Object.keys(projected).sort(), ['description', 'name', 'parameters'].sort());
@@ -196,11 +214,47 @@ test('精简模式：update 落盘、snapshot 回传，schemaOf 投影按状态�
     assert.equal(typeof row.slimTokens, 'number');
     assert.equal(row.exempt, false);
 
-    // 关掉精简：全体恢复原样；豁免名单保留（下次开启仍生效）。
+    // 关掉精简：全体恢复原样；豁免名单与预算保留。
     const slimOff = gate.update({ slim: false });
     assert.equal(slimOff.slim, false);
     assert.equal(scopedTools.schemaOf(definition).description, definition.description);
+    assert.equal(slimOff.budget, 150);
     assert.deepEqual(globalTools === scopedTools, false);
+  } finally {
+    gate.dispose();
+  }
+});
+
+test('preview：按需返回裁剪明细（kept 标记 + slim 文本），未知工具 found:false', async () => {
+  isolateHome();
+  const { gate } = await createHarness(MODULE_URL);
+  try {
+    gate.update({ slim: true, budget: 150 });
+    const probe = gate.preview('read');
+    assert.equal(probe.ok, true);
+    assert.equal(probe.found, true);
+    assert.equal(probe.budget, 150);
+    assert.equal(probe.exempt, false, '精简开启且未豁免 → 生效中');
+    assert.ok(Array.isArray(probe.parts) && probe.parts.length > 1, '原文切成多句');
+    assert.equal(probe.parts[0].kept, true, '第 1 句恒留');
+    assert.ok(probe.parts.some((p) => p.kept && p.text.includes('Never')), '纪律句标 kept');
+    assert.ok(probe.parts.some((p) => !p.kept), '有被裁的句子才有对照意义');
+    assert.ok(probe.slim.includes('Never'), 'slim 文本含纪律句');
+    assert.ok(probe.slim.length < probe.original.length, 'slim 短于原文');
+
+    // 豁免后：exempt=true，parts 仍是全 kept 之外的明细无关紧要，slim 应为原文。
+    gate.update({ exemptToggle: { name: 'read', exempt: true } });
+    const exempted = gate.preview('read');
+    assert.equal(exempted.exempt, true);
+    assert.equal(exempted.slim, AGENT_DEFS.get('read').description);
+
+    // 精简关：同样视为未生效。
+    gate.update({ slim: false, exemptToggle: { name: 'read', exempt: false } });
+    assert.equal(gate.preview('read').exempt, true);
+
+    // 未知工具。
+    const missing = gate.preview('no_such_tool');
+    assert.equal(missing.found, false);
   } finally {
     gate.dispose();
   }
@@ -210,7 +264,7 @@ test('dispose 后投影回到透传（精简不再生效）', async () => {
   isolateHome();
   const { gate, scopedTools } = await createHarness(MODULE_URL);
   const definition = AGENT_DEFS.get('read');
-  gate.update({ slim: true });
+  gate.update({ slim: true, budget: 150 });
   assert.notEqual(scopedTools.schemaOf(definition).description, definition.description);
   gate.dispose();
   assert.equal(scopedTools.schemaOf(definition).description, definition.description);

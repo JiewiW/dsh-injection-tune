@@ -98,6 +98,7 @@ const SNAPSHOT = {
   enabled: true,
   deny: ['browser_open'],
   updatedAt: '2026-10-30T00:00:00.000Z',
+  budget: 320,
   agents: 2,
   totals: { count: 2, deniedCount: 1, chars: 800, tokens: 204, deniedTokens: 120 },
   groups: [{
@@ -118,7 +119,8 @@ test('三种数据态都能渲染', () => {
   const loading = render([null, '', true]);
   assert.ok(loading.text.includes('gateTitle'));
   assert.ok(loading.text.includes('gateLoading'));
-  assert.equal(loading.effects.length, 1, '应注册一次拉取 effect');
+  // 1 拉取 + 2 预览状态 ref 同步（expanded / previewCache）。
+  assert.equal(loading.effects.length, 3, '应注册拉取与两条 ref 同步 effect');
 
   const ready = render([SNAPSHOT, '', false]);
   for (const token of ['gateEnable', 'gateSummary', 'gateRefresh', 'gateAgents',
