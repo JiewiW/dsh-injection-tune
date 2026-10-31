@@ -136,9 +136,11 @@ test('AI-3 no-ops when section count is within budget', () => {
 test('host rewrites runtime-context text but keeps source', () => {
   const { ctx, listeners, logs } = fakeCtx();
   const dispose = host.apply(ctx, resolveConfig({ dedupeRuntimeContext: true }));
-  assert.equal(listeners.length, 1);
+  // 2 条：agent/pre-step（AI-1~AI-6）+ system-prompt/assemble（AI-4/5）
+  assert.equal(listeners.length, 2);
   assert.equal(listeners[0].name, 'agent/pre-step');
   assert.equal(listeners[0].options.prepend, true);
+  assert.equal(listeners[1].name, 'system-prompt/assemble');
 
   const source = { kind: 'runtime-context', form: 'snapshot', sections: [] };
   const text = `head\n\n${LONG_A}\n\nmid\n\n${LONG_A}\n\ntail`;
@@ -159,8 +161,10 @@ test('host registers the listener even when all features are off', () => {
   const { ctx, listeners } = fakeCtx();
   host.apply(ctx, resolveConfig({}));
 
-  assert.equal(listeners.length, 1);
+  // 2 条：agent/pre-step（AI-1~AI-6）+ system-prompt/assemble（AI-4/5）
+  assert.equal(listeners.length, 2);
   assert.equal(listeners[0].name, 'agent/pre-step');
+  assert.equal(listeners[1].name, 'system-prompt/assemble');
 
   const source = { kind: 'runtime-context', form: 'snapshot', sections: [] };
   const text = `head\n\n${LONG_A}\n\nmid\n\n${LONG_A}\n\ntail`;

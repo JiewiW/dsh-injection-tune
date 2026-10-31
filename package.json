@@ -1,9 +1,9 @@
 {
   "name": "dsh-injection-tune",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "DSH host plugin: 在 agent/pre-step 瀑布里按开关精简 runtime-context 冗余、技能目录增量注入与项目指令延迟注入；并提供一个按注册来源分框、逐条停用工具的可见性门。",
+  "description": "DSH host plugin: 在 systemPrompt.assemble + agent/pre-step 两条路径上精简外部插件注入；6 个独立开关（ACP section、auto-memory runtime-context、session-kit tasks 的拦截 + AI-1/2/3 改写），外加工具可见性门。",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
