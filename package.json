@@ -1,6 +1,6 @@
 {
   "name": "dsh-injection-tune",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "type": "module",
   "description": "DSH host plugin: 在 systemPrompt.assemble + agent/pre-step 两条路径上精简外部插件注入；6 个独立开关（ACP section、auto-memory runtime-context、session-kit tasks 的拦截 + AI-1/2/3 改写），外加工具可见性门。",
