@@ -125,7 +125,8 @@ test('三种数据态都能渲染', () => {
   const ready = render([SNAPSHOT, '', false]);
   for (const token of ['gateEnable', 'gateSummary', 'gateRefresh', 'gateAgents',
     'dsh-builtin-browser', 'gateReason_prefix', 'browser_open', '打开一个浏览器标签页并导航到指定 URL。',
-    'gateFuncPrefix', 'gateCritical', 'gateHiddenTag', '≈104 tok']) {
+    // 子栏开关必须常驻渲染：否则折叠时连「展开」按钮都没有，功能等于不存在（回归项）。
+    'gateFuncPrefix', 'gateCritical', 'gateHiddenTag', '≈104 tok', 'gatePrevSlim', 'gatePrevOrig', 'gateBudget']) {
     assert.ok(ready.text.includes(token), `有数据渲染缺少：${token}`);
   }
 
