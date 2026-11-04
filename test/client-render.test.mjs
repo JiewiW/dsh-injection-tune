@@ -183,3 +183,110 @@ test('中英字典成对', () => {
     assert.equal(count, 2, `${key} 应中英各一处，实际 ${count}`);
   }
 });
+
+// ── AI-7 技能可见性门 ────────────────────────────────────────────────────
+
+/** 加载 bundle 并渲染一次技能门面板（与工具门共用同一套 react 替身）。 */
+function renderSkillGate(values) {
+  let captured = null;
+  const seed = { values, cursor: 0, effects: [] };
+  const react = makeReact(seed);
+  const requireStub = (id) => {
+    if (id === 'react') return react;
+    if (id === '@deepseek-ai/dsh-client-ui-primitives') return {};
+    throw new Error(`unexpected require: ${id}`);
+  };
+  globalThis.window = {
+    __ModuleLoader__: { load({ factory }) { captured = factory(requireStub); } },
+  };
+  new Function(source)();
+
+  const t = (key, params) => {
+    if (!params) return key;
+    return Object.keys(params).reduce(
+      (acc, name) => acc.replace(new RegExp(`\\{${name}\\}`, 'g'), String(params[name])),
+      key,
+    );
+  };
+  const styles = new Proxy({}, { get: () => ({}) });
+  const tree = captured.SkillGateSection({ t, styles });
+  return { text: textOf(tree), tree, effects: seed.effects };
+}
+
+const SKILL_SNAPSHOT = {
+  ok: true,
+  enabled: true,
+  deny: ['bundled-helper'],
+  updatedAt: '2026-11-04T00:00:00.000Z',
+  agents: 2,
+  totals: { count: 2, deniedCount: 1, chars: 600, tokens: 154, deniedTokens: 80 },
+  groups: [{
+    source: 'user-dsh',
+    label: 'user-dsh',
+    reason: 'registry',
+    tokens: 154,
+    chars: 600,
+    deniedCount: 1,
+    skills: [
+      { name: 'bundled-helper', summary: 'Bundled helper.', provider: 'bundled', chars: 400, tokens: 104, modelInvocable: false, denied: true },
+      { name: 'matlab-code-writing', summary: 'Write MATLAB code.', provider: 'filesystem', chars: 200, tokens: 54, modelInvocable: true, denied: false },
+    ],
+  }],
+};
+
+test('技能门：三种数据态都能渲染', () => {
+  const loading = renderSkillGate([null, '', true]);
+  assert.ok(loading.text.includes('skillGateTitle'));
+  assert.ok(loading.text.includes('skillGateLoading'));
+  assert.equal(loading.effects.length, 1, '只注册一条拉取 effect');
+
+  const ready = renderSkillGate([SKILL_SNAPSHOT, '', false]);
+  for (const token of ['skillGateEnable', 'skillGateGestureNote', 'skillGateScopeNote', 'skillGateSummary',
+    'skillGateRefresh', 'skillGateAgents', 'user-dsh', 'skillGateReason_registry',
+    'bundled-helper', 'matlab-code-writing', 'skillGateFuncPrefix', 'skillGateProviderPrefix',
+    'skillGateModelOnly', 'skillGateHiddenTag', '≈104 tok', '≈54 tok',
+    'gateSortLabel', 'gateSortName', 'gateSortState']) {
+    assert.ok(ready.text.includes(token), `有数据渲染缺少：${token}`);
+  }
+
+  const failed = renderSkillGate([null, 'boom', false]);
+  assert.ok(failed.text.includes('boom'));
+});
+
+test('技能门：勾选语义是激活，每行只有一个框', () => {
+  const boxes = checkboxes(renderSkillGate([SKILL_SNAPSHOT, '', false]).tree);
+  assert.equal(boxes.length, 3, '1 总开关 + 2 个技能各 1 个激活框');
+  assert.equal(boxes[0].checked, true, '总开关应勾选');
+  // 默认按名称正序：bundled-helper（已隐藏）在 matlab-code-writing 之前。
+  assert.equal(boxes[1].checked, false, '被隐藏的技能不应勾选');
+  assert.equal(boxes[2].checked, true, '已激活的技能应勾选');
+});
+
+test('技能门：排序只改框内顺序', () => {
+  const asc = checkboxes(renderSkillGate([SKILL_SNAPSHOT, '', false, 'name', false]).tree);
+  const desc = checkboxes(renderSkillGate([SKILL_SNAPSHOT, '', false, 'name', true]).tree);
+  const byState = checkboxes(renderSkillGate([SKILL_SNAPSHOT, '', false, 'state', false]).tree);
+  const activeBoxes = (list) => list.slice(1).map((box) => box.checked);
+  assert.deepEqual(activeBoxes(asc), [false, true], '按名称正序：bundled-helper, matlab-code-writing');
+  assert.deepEqual(activeBoxes(desc), [true, false], '按名称倒序应翻转');
+  assert.deepEqual(activeBoxes(byState), [true, false], '按激活情况：激活的排前');
+});
+
+test('技能门：折叠后不渲染技能行但保留框头', () => {
+  const folded = renderSkillGate([SKILL_SNAPSHOT, '', false, 'name', false, { 'user-dsh': true }]);
+  assert.equal(checkboxes(folded.tree).length, 1, '折叠后只剩总开关');
+  assert.ok(folded.text.includes('user-dsh'));
+  assert.ok(!folded.text.includes('bundled-helper'), '折叠后不应渲染技能行');
+  assert.ok(folded.text.includes('▸'), '折叠时箭头应为 ▸');
+});
+
+test('技能门：中英字典成对且面板挂进设置选项卡', () => {
+  for (const key of ['skillGateTitle', 'skillGateHint', 'skillGateEnable', 'skillGateGestureNote',
+    'skillGateScopeNote', 'skillGateSummary', 'skillGateGroupMeta', 'skillGateGroupHide', 'skillGateGroupRestore',
+    'skillGateReason_registry', 'skillGateReason_none', 'skillGateHiddenTag', 'skillGateModelOnly']) {
+    const count = (source.match(new RegExp(`${key}:`, 'g')) || []).length;
+    assert.equal(count, 2, `${key} 应中英各一处，实际 ${count}`);
+  }
+  assert.ok(source.includes('react.createElement(SkillGateSection'), '技能门面板必须挂进设置选项卡');
+  assert.ok(source.includes("'/plugins/injection-tune/skill-gate'"), '技能门必须走独立设置路由');
+});

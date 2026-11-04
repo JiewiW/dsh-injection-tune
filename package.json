@@ -1,9 +1,9 @@
 {
   "name": "dsh-injection-tune",
-  "version": "0.3.2",
+  "version": "0.4.1",
   "private": true,
   "type": "module",
-  "description": "DSH host plugin: 在 systemPrompt.assemble + agent/pre-step 两条路径上精简外部插件注入；6 个独立开关（ACP section、auto-memory runtime-context、session-kit tasks 的拦截 + AI-1/2/3 改写），外加工具可见性门。",
+  "description": "DSH host plugin: 在 systemPrompt.assemble + agent/pre-step 两条路径上精简外部插件注入；6 个独立开关（ACP section、auto-memory runtime-context、session-kit tasks 的拦截 + AI-1/2/3 改写），外加工具可见性门与技能可见性门。",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
@@ -36,6 +36,8 @@
   "scripts": {
     "test": "node --test",
     "test:gate": "node --test test/tool-gate.test.mjs",
-    "syntax": "node --check lib/host.js && node --check lib/config.js && node --check lib/client.js && node --check lib/tool-gate.js && node --check lib/features/dedupe-runtime-context.js && node --check lib/features/incremental-skill-catalog.js && node --check lib/features/deferred-agent-instructions.js"
+    "test:skill-gate": "node --test test/skill-gate.test.mjs",
+    "test:panel": "node --test test/client-panel.test.mjs",
+    "syntax": "node --check lib/host.js && node --check lib/config.js && node --check lib/client.js && node --check lib/tool-gate.js && node --check lib/skill-gate.js && node --check lib/features/dedupe-runtime-context.js && node --check lib/features/incremental-skill-catalog.js && node --check lib/features/deferred-agent-instructions.js"
   }
 }
