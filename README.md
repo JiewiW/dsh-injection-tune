@@ -1,6 +1,6 @@
 # dsh-injection-tune
 
-DSH 宿主插件，用于压低每个请求步的注入体积。设置页分「自动精简」「注入名单」两类共 6 个模块，各自独立：自动精简里的三项外部注入拦截默认开启，其余改写默认关闭；两扇注入名单默认关闭（名单保留但不生效），因此加载后不会改变工具与技能的可用性。
+DSH 宿主插件，用于压低每个请求步的注入体积。设置页分「自动精简」「注入名单」两类共 6 个模块，各自独立：自动精简里的三项外部注入拦截默认开启、新增的模型切换提示拦截默认关闭，其余改写默认关闭；两扇注入名单默认关闭（名单保留但不生效），因此加载后不会改变工具与技能的可用性。
 
 ## 背景
 
@@ -12,7 +12,7 @@ DSH 的 agent 每一步都会重新组装请求：runtime-context 快照、技�
 
 | 顺序 | 分类 | 模块 | 内部代号 |
 |---|---|---|---|
-| 1 | 自动精简 | 外部插件注入拦截（3 个独立开关） | AI-4 / AI-5 / AI-6 |
+| 1 | 自动精简 | 外部插件注入拦截（4 个独立开关） | AI-4 / AI-5 / AI-6 / 模型切换 |
 | 2 | 自动精简 | 运行时上下文去重 | AI-1 |
 | 3 | 自动精简 | 技能目录增量下发 | AI-2 |
 | 4 | 自动精简 | 项目指令延迟注入 | AI-3 |
@@ -40,6 +40,17 @@ runtime-context 快照每步都会整体重发，内部大量块与上一步相�
 ### AI-3 · 项目指令延迟注入（`deferredAgentInstructions`）
 
 项目/全局指令原本挂在会话最前面，每步都占一段前缀。开启后延迟到首次出现相关信号时才注入。该功能由 `dsh-agent-instructions` 侧配合完成。
+
+### 模型切换提示拦截（`suppressModelSelectionNotice`）
+
+会话中途换模型时，`@deepseek-ai/dsh-agent` 的 `installModelSelection` 会在 `agent/pre-step` 追加一条 `user` 消息 `[model changed: …]`（`source.kind === 'model-selection'`、`form === 'notice'`、`summary === '旧模型 → 新模型'`，见 `lib/types/model-selection.js:12-26`）。这条消息会落盘，并在之后每次请求里随历史重发。
+
+勾选后：
+
+- 该消息按 `source` 从 `decision.messages` 剔除（与 AI-6 同一挂点、同一判据）；
+- 每个 Session 的 `deriveMessages()` 被包一层投影，连开启开关之前已落盘的历史提示也不再进入请求（`buildRequest` 与 `agent-loop-invariant` 都走这个方法，两者一致，不会触发请求-日志一致性告警）。
+
+开关默认关闭、volatile（改动即时生效，无需重启）；会话日志不改写，轨迹里仍能看到此前落盘的记录。
 
 ### 工具注入名单：工具可见性门 + 精简模式
 
@@ -74,6 +85,7 @@ runtime-context 快照每步都会整体重发，内部大量块与上一步相�
 | `incrementalSkillCatalog` | `false` | AI-2 技能目录增量注入 |
 | `deferredAgentInstructions` | `false` | AI-3 项目指令延迟注入 |
 | `skillCatalogKeepDescription` | `true` | AI-2 目录条目保留 description |
+| `suppressModelSelectionNotice` | `false` | 拦截内核的模型切换提示 `[model changed: …]`；勾选后不进本轮请求，历史里的旧提示也不再随请求重发 |
 
 所有配置均为 volatile（改后即时生效，不需重启）。AI-4 与 AI-7 的开关和名单在面板里操作，不占配置键：前者落 `~/.dsh/injection-tune/tool-gate.json`，后者落 `~/.dsh/injection-tune/skill-gate.json`，两扇门默认均关闭。
 
@@ -91,6 +103,7 @@ node --test
 
 ## 版本
 
+- **v0.4.2** — 新增「模型切换提示拦截」开关（默认关闭）：按 `source.kind === 'model-selection' && form === 'notice'` 在 `agent/pre-step` 剔除 `[model changed: …]`，并投影 `Session.deriveMessages()` 让已落盘的历史提示不再随请求重发
 - **v0.4.1** — 设置页重整：6 个模块分「自动精简 / 注入名单」两类重排，标题改用功能名（消除 AI-4 重号），新增顶部总折叠开关、逐卡片折叠与 localStorage 记忆、折叠态状态徽标；折叠不卸载门面板
 - **v0.4.0** — AI-7 技能可见性门：按来源分框逐条控制技能目录注入（投影式过滤 `skills.snapshot`、执行侧随 `skills.list` 兜底、独立设置路由与面板）；回流线上 AI-4 ACP stub 热修
 - **v0.2.4** — 精简模式升级为关键词加权裁剪（硬纪律句优先、预算可调默认 320、双语词典），AI-4 新增预算输入框与逐工具「精简预览 / 原文对照」子栏（按需展开计算）

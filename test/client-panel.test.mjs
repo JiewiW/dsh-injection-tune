@@ -191,7 +191,7 @@ test('卡片头状态徽标：自动精简计数 + 名单异步统计', () => {
     values: [{}, stats],
     config: { dedupeRuntimeContext: true, suppressACPSection: false },
   });
-  assert.ok(tokens.includes('badgeOn{"on":2,"total":3}'), '外部拦截应有 2/3 项启用');
+  assert.ok(tokens.includes('badgeOn{"on":2,"total":4}'), '外部拦截应有 2/4 项启用');
   assert.ok(tokens.includes('badgeOn{"on":1,"total":1}'), '去重卡片应显示 1/1');
   assert.ok(tokens.includes('badgeGateOn{"count":45,"denied":3}'), '工具名单徽标应显示已隐藏数');
   assert.ok(tokens.includes('badgeLoading'), '技能名单尚未回传时应显示读取中');
@@ -199,6 +199,15 @@ test('卡片头状态徽标：自动精简计数 + 名单异步统计', () => {
   const off = renderPanel({ values: [{}, { tools: { enabled: false, count: 45, denied: 0 }, skills: { error: true } }] });
   assert.ok(off.tokens.includes('badgeGateOff'), '名单关闭时徽标应说明未启用');
   assert.ok(off.tokens.includes('badgeGateFail'), '读取失败时徽标应说明不可用');
+});
+
+test('模型切换提示拦截开关已挂进外部拦截卡片且中英字典成对', () => {
+  const { tokens } = renderPanel({ values: [allOpen()] });
+  assert.ok(tokens.includes('fieldSupModelSel'), '卡片里应出现模型切换提示勾选项');
+  for (const key of ['fieldSupModelSel', 'fieldSupModelSelHint']) {
+    const count = (source.match(new RegExp(`(?<![A-Za-z0-9_])${key}:`, 'g')) || []).length;
+    assert.equal(count, 2, `${key} 应中英各一处，实际 ${count}`);
+  }
 });
 
 test('界面标题不再出现 AI-x 代号，中英字典成对', () => {
