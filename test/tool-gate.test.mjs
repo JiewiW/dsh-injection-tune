@@ -78,6 +78,56 @@ async function createHarness(moduleUrl) {
 
 const MODULE_URL = new URL('../lib/tool-gate.js', import.meta.url).href;
 
+/**
+ * 真实内核的 Tools 服务是**单实例**：agent.ctx.tools 与插件级 ctx.tools 指向它，
+ * restrict 装在 layers 上，view(agent).visible 会过滤 deny，而 knownNames /
+ * restrictableNames 保留限制之前的名字事实。上面那个 FakeTools 两个实例是老用例
+ * 的历史夹具，这里另做一个能复现「已隐藏工具从 visible 消失」的替身。
+ */
+class ScopedFakeTools {
+  constructor(allDefs, globalNames) {
+    this.allDefs = allDefs;
+    this.globalNames = globalNames;
+    this.deny = new Set();
+  }
+  register() { return () => {}; }
+  view(scope) {
+    const isGlobal = scope === undefined;
+    const names = isGlobal ? this.globalNames : [...this.allDefs.keys()];
+    const visible = new Map();
+    for (const name of names) {
+      if (!isGlobal && this.deny.has(name)) continue;
+      visible.set(name, this.allDefs.get(name));
+    }
+    return { visible, knownNames: new Set(names), restrictableNames: new Set(names) };
+  }
+  restrict(filter) {
+    this.deny = new Set(filter.deny ?? []);
+    return () => { this.deny = new Set(); };
+  }
+  schemaOf(definition) {
+    return { name: definition.name, description: definition.description, parameters: definition.parameters };
+  }
+}
+
+/** 只有 read 注册在全局层；mystery_tool 只活在 agent 层，且来源未识别。 */
+async function createScopedHarness(moduleUrl) {
+  const { createToolGate } = await import(moduleUrl);
+  const defs = new Map([
+    ['read', { name: 'read', description: 'Read a UTF-8 text file.', parameters: { type: 'object' } }],
+    ['mystery_tool', { name: 'mystery_tool', description: 'Agent-plane only, source unknown.', parameters: {} }],
+  ]);
+  const tools = new ScopedFakeTools(defs, ['read']);
+  const agents = [{ id: 'a1', ctx: { tools } }];
+  const scope = {
+    tools,
+    agents: { list: () => agents },
+    logger: { info: () => {}, warn: () => {} },
+    on: () => () => {},
+  };
+  return { gate: createToolGate(scope, scope.logger), tools };
+}
+
 test('按注册来源分框、描述完整下发（不省略）', async () => {
   isolateHome();
   const { gate } = await createHarness(MODULE_URL);
@@ -268,4 +318,77 @@ test('dispose 后投影回到透传（精简不再生效）', async () => {
   assert.notEqual(scopedTools.schemaOf(definition).description, definition.description);
   gate.dispose();
   assert.equal(scopedTools.schemaOf(definition).description, definition.description);
+});
+
+// ── 回归：已停用的工具必须留在名单里，否则设置页连恢复入口都没有 ────────────
+
+test('隐藏 agent 层工具：「未识别来源」分组不消失，置灰态与节省统计都在', async () => {
+  isolateHome();
+  const { gate } = await createScopedHarness(MODULE_URL);
+  try {
+    const before = gate.snapshot();
+    assert.ok(before.groups.some((g) => g.reason === 'none' && g.tools.some((t) => t.name === 'mystery_tool')));
+
+    const after = gate.update({ enabled: true, deny: ['mystery_tool'] });
+    const unknown = after.groups.find((g) => g.reason === 'none');
+    assert.ok(unknown, '「未识别来源」分组不得整体消失');
+    const row = unknown.tools.find((t) => t.name === 'mystery_tool');
+    assert.ok(row, '被隐藏的工具行仍在，用户才有恢复入口');
+    assert.equal(row.denied, true, '界面据此把整行置灰');
+    assert.ok(row.tokens > 0, '体积信息由定义缓存保留');
+    assert.equal(row.summary, 'Agent-plane only, source unknown.', '描述也由缓存保留');
+    assert.equal(after.totals.count, 2, '总数不受隐藏影响');
+    assert.equal(after.totals.deniedCount, 1, '节省统计计入已隐藏工具');
+    assert.ok(after.totals.deniedTokens > 0);
+    assert.deepEqual(after.deny, ['mystery_tool']);
+
+    // 全局层工具与 agent 层工具同时隐藏：两条采集路径都要能列出来。
+    const both = gate.update({ deny: ['read', 'mystery_tool'] });
+    assert.equal(both.totals.deniedCount, 2);
+    assert.ok(both.groups.flatMap((g) => g.tools).some((t) => t.name === 'read' && t.denied === true));
+
+    // 恢复：撤掉 deny 后重新可见，状态翻回激活。
+    const restored = gate.update({ deny: [] });
+    const restoredRow = restored.groups.flatMap((g) => g.tools).find((t) => t.name === 'mystery_tool');
+    assert.equal(restoredRow.denied, false);
+    assert.equal(restored.totals.deniedCount, 0);
+  } finally {
+    gate.dispose();
+  }
+});
+
+test('名单里当前未注册的工具仍列出（可恢复、可清理），且不下发给 restrict', async () => {
+  isolateHome();
+  const { gate, tools } = await createScopedHarness(MODULE_URL);
+  try {
+    const snap = gate.update({ enabled: true, deny: ['ghost_agent_tool'] });
+    const row = snap.groups.flatMap((g) => g.tools).find((t) => t.name === 'ghost_agent_tool');
+    assert.ok(row, '当前不可见、但已写进名单的条目不得消失');
+    assert.equal(row.denied, true, '界面据此置灰');
+    assert.equal(row.tokens, 0, '体积未知就不编造');
+    assert.equal(snap.totals.deniedCount, 1);
+    assert.equal(tools.deny.size, 0, '未知名字不能下发给 restrict（否则会抛错）');
+
+    // 用户仍能从界面取消勾选把它从名单里清掉。
+    const cleared = gate.update({ deny: [] });
+    assert.equal(cleared.groups.flatMap((g) => g.tools).some((t) => t.name === 'ghost_agent_tool'), false);
+    assert.equal(cleared.totals.deniedCount, 0);
+  } finally {
+    gate.dispose();
+  }
+});
+
+test('已停用工具的 preview 仍能查到定义（不报 found:false）', async () => {
+  isolateHome();
+  const { gate } = await createScopedHarness(MODULE_URL);
+  try {
+    gate.update({ enabled: true, slim: true, deny: ['mystery_tool'] });
+    const probe = gate.preview('mystery_tool');
+    assert.equal(probe.ok, true);
+    assert.equal(probe.found, true);
+    assert.equal(probe.original, 'Agent-plane only, source unknown.');
+    assert.equal(gate.preview('no_such_tool').found, false, '真·未知工具仍报未找到');
+  } finally {
+    gate.dispose();
+  }
 });
