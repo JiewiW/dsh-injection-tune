@@ -213,3 +213,129 @@ test('catalogLineChars 与上游 catalogDescription 同口径（空白归一 + 5
   const expectedBody = `${'x'.repeat(497)}...`;
   assert.equal(catalogLineChars(long), `- \`long\`: ${expectedBody}`.length + 1);
 });
+
+// ── 三档隐藏模式（hide / name / headline） ────────────────────────────────
+
+test('projectSkill 三档投影：hide 整条移除、name 清空描述、headline 截断', async () => {
+  const { projectSkill } = await import(MODULE_URL);
+  const skill = { name: 'demo', description: '  a   b  ', invocation: { modelInvocable: true } };
+
+  assert.equal(projectSkill(skill, 'hide', 60), null);
+
+  const named = projectSkill(skill, 'name', 60);
+  assert.equal(named.description, '');
+  assert.equal(named.name, 'demo');
+  // 其余字段必须原样保留，skill 工具后续还要靠 name/invocation 加载正文。
+  assert.deepEqual(named.invocation, { modelInvocable: true });
+
+  const headed = projectSkill({ name: 'long', description: 'x'.repeat(200) }, 'headline', 60);
+  assert.equal(headed.description.length, 60);
+  assert.equal(headed.description, `${'x'.repeat(57)}...`);
+});
+
+test('normalizeState 对 mode 与 headlineChars 做白名单与钳制', async () => {
+  const { normalizeState, DEFAULT_STATE } = await import(MODULE_URL);
+  assert.equal(normalizeState({}).mode, 'hide'); // 旧配置缺字段 → 出厂行为
+  assert.equal(normalizeState({ mode: 'bogus' }).mode, 'hide');
+  assert.equal(normalizeState({ mode: 'name' }).mode, 'name');
+  assert.equal(normalizeState({ headlineChars: 9999 }).headlineChars, 500);
+  assert.equal(normalizeState({ headlineChars: 1 }).headlineChars, 10);
+  assert.equal(normalizeState({ headlineChars: 'abc' }).headlineChars, 60);
+  assert.equal(DEFAULT_STATE.mode, 'hide'); // 出厂仍是整条隐藏
+});
+
+test('name 档：被停用技能仍在 list/snapshot 里，但描述为空（模型能发现、能加载）', async () => {
+  isolateHome();
+  const { gate, skillsService } = await createHarness(MODULE_URL);
+  await gate.update({ enabled: true, deny: ['matlab-code-writing'], mode: 'name' });
+
+  const viaList = await skillsService.list(AGENT_LOOKUP);
+  const hit = viaList.find((s) => s.name === 'matlab-code-writing');
+  assert.ok(hit, 'name 档必须保留条目，否则 skill 工具报 unknown');
+  assert.equal(hit.description, '');
+  assert.equal(viaList.length, SKILLS.length); // 条数不变
+  gate.dispose();
+});
+
+test('headline 档：保留名字与前 N 字，条数不变', async () => {
+  isolateHome();
+  const { gate, skillsService } = await createHarness(MODULE_URL);
+  await gate.update({ enabled: true, deny: ['matlab-code-writing'], mode: 'headline', headlineChars: 20 });
+
+  const viaList = await skillsService.list(AGENT_LOOKUP);
+  const hit = viaList.find((s) => s.name === 'matlab-code-writing');
+  assert.ok(hit);
+  assert.equal(hit.description.length, 20);
+  assert.ok(hit.description.endsWith('...'));
+  gate.dispose();
+});
+
+test('hide 档维持原行为：整条移除', async () => {
+  isolateHome();
+  const { gate, skillsService } = await createHarness(MODULE_URL);
+  await gate.update({ enabled: true, deny: ['matlab-code-writing'], mode: 'hide' });
+
+  const viaList = await skillsService.list(AGENT_LOOKUP);
+  assert.equal(viaList.find((s) => s.name === 'matlab-code-writing'), undefined);
+  assert.equal(viaList.length, SKILLS.length - 1);
+  gate.dispose();
+});
+
+test('三档下全局视图都不受影响（设置页仍能恢复）', async () => {
+  for (const mode of ['hide', 'name', 'headline']) {
+    isolateHome();
+    const { gate, skillsService } = await createHarness(MODULE_URL);
+    await gate.update({ enabled: true, deny: ['matlab-code-writing'], mode });
+    const globalView = await skillsService.snapshot(GLOBAL_LOOKUP);
+    assert.equal(globalView.skills.length, SKILLS.length, `${mode}: 全局视图必须完整`);
+    assert.ok(globalView.skills.some((s) => s.name === 'matlab-code-writing'));
+    gate.dispose();
+  }
+});
+
+test('投影必须稳定：同一名单连续调用产出相同描述（防 digest 抖动重发）', async () => {
+  isolateHome();
+  const { gate, skillsService } = await createHarness(MODULE_URL);
+  await gate.update({ enabled: true, deny: ['matlab-code-writing'], mode: 'headline', headlineChars: 20 });
+
+  const runs = [];
+  for (let i = 0; i < 3; i += 1) {
+    const list = await skillsService.list(AGENT_LOOKUP);
+    runs.push(JSON.stringify(list.map((s) => [s.name, s.description])));
+  }
+  assert.equal(runs[0], runs[1]);
+  assert.equal(runs[1], runs[2]);
+  gate.dispose();
+});
+
+test('snapshot 统计按 mode 算实际占用：hide 省满、name/headline 只省描述', async () => {
+  isolateHome();
+  const { gate } = await createHarness(MODULE_URL);
+
+  const hideView = await gate.update({ enabled: true, deny: ['matlab-code-writing'], mode: 'hide' });
+  assert.equal(hideView.totals.keptTokens, 0, 'hide 档隐藏项不再占任何体积');
+  assert.ok(hideView.totals.savedTokens > 0);
+
+  const nameView = await gate.update({ mode: 'name' });
+  assert.ok(nameView.totals.keptTokens > 0, 'name 档仍占「名字」那一行的体积');
+  assert.ok(nameView.totals.savedTokens < hideView.totals.savedTokens);
+  assert.equal(nameView.totals.deniedCount, 1);
+
+  const headView = await gate.update({ mode: 'headline', headlineChars: 20 });
+  assert.ok(headView.totals.keptTokens > nameView.totals.keptTokens, 'headline 比 name 多占摘要部分');
+  assert.equal(headView.mode, 'headline');
+  gate.dispose();
+});
+
+test('mode 与 headlineChars 跨实例落盘复用', async () => {
+  isolateHome();
+  const { gate } = await createHarness(MODULE_URL);
+  await gate.update({ enabled: true, deny: ['matlab-code-writing'], mode: 'headline', headlineChars: 42 });
+  gate.dispose();
+
+  const { gate: reopened } = await createHarness(MODULE_URL);
+  const view = await reopened.snapshot();
+  assert.equal(view.mode, 'headline');
+  assert.equal(view.headlineChars, 42);
+  reopened.dispose();
+});
