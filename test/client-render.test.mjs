@@ -66,6 +66,40 @@ function checkboxes(node, out = []) {
   return out;
 }
 
+/** 收集所有 <select>（逐技能档位下拉菜单）。 */
+function selects(node, out = []) {
+  if (node === null || node === undefined) return out;
+  if (Array.isArray(node)) {
+    for (const child of node) selects(child, out);
+    return out;
+  }
+  if (typeof node !== 'object') return out;
+  if (node.type === 'select' && node.props) out.push(node);
+  for (const child of node.children || []) selects(child, out);
+  return out;
+}
+
+/** 拉平后取出一个 select 节点的所有 option 子节点。 */
+function optionNodes(selectNode) {
+  const flat = [];
+  const walk = (n) => {
+    if (n === null || n === undefined) return;
+    if (Array.isArray(n)) { n.forEach(walk); return; }
+    if (typeof n !== 'object') return;
+    if (n.type === 'option') { flat.push(n); return; }
+    (n.children || []).forEach(walk);
+  };
+  walk(selectNode.children || []);
+  return flat;
+}
+
+/** 下拉菜单当前选中的值。 */
+function selectValue(selectNode) {
+  const options = optionNodes(selectNode);
+  const hit = options.find((o) => o.props && o.props.selected === true);
+  return hit ? hit.props.value : (selectNode.props && selectNode.props.value);
+}
+
 /** 加载 bundle 并渲染一次。 */
 function render(values) {
   let captured = null;
@@ -216,20 +250,21 @@ function renderSkillGate(values) {
 const SKILL_SNAPSHOT = {
   ok: true,
   enabled: true,
-  deny: ['bundled-helper'],
+  rules: { 'bundled-helper': 'hide' },
+  headlineChars: 60,
   updatedAt: '2026-11-04T00:00:00.000Z',
   agents: 2,
-  totals: { count: 2, deniedCount: 1, chars: 600, tokens: 154, deniedTokens: 80 },
+  totals: { count: 2, hiddenCount: 1, chars: 600, tokens: 154, hiddenTokens: 80, keptTokens: 0, savedTokens: 80 },
   groups: [{
     source: 'user-dsh',
     label: 'user-dsh',
     reason: 'registry',
     tokens: 154,
     chars: 600,
-    deniedCount: 1,
+    hiddenCount: 1,
     skills: [
-      { name: 'bundled-helper', summary: 'Bundled helper.', provider: 'bundled', chars: 400, tokens: 104, modelInvocable: false, denied: true },
-      { name: 'matlab-code-writing', summary: 'Write MATLAB code.', provider: 'filesystem', chars: 200, tokens: 54, modelInvocable: true, denied: false },
+      { name: 'bundled-helper', summary: 'Bundled helper.', provider: 'bundled', chars: 400, tokens: 104, modelInvocable: false, mode: 'hide', hidden: true, keptChars: 0, keptTokens: 0 },
+      { name: 'matlab-code-writing', summary: 'Write MATLAB code.', provider: 'filesystem', chars: 200, tokens: 54, modelInvocable: true, mode: null, hidden: false, keptChars: 200, keptTokens: 54 },
     ],
   }],
 };
@@ -244,7 +279,7 @@ test('技能门：三种数据态都能渲染', () => {
   for (const token of ['skillGateEnable', 'skillGateGestureNote', 'skillGateScopeNote', 'skillGateSummary',
     'skillGateRefresh', 'skillGateAgents', 'user-dsh', 'skillGateReason_registry',
     'bundled-helper', 'matlab-code-writing', 'skillGateFuncPrefix', 'skillGateProviderPrefix',
-    'skillGateModelOnly', 'skillGateHiddenTag', '≈104 tok', '≈54 tok',
+    'skillGateModelOnly', 'skillGateHiddenTag', '≈0 tok', '≈54 tok',
     'gateSortLabel', 'gateSortName', 'gateSortState']) {
     assert.ok(ready.text.includes(token), `有数据渲染缺少：${token}`);
   }
@@ -253,28 +288,35 @@ test('技能门：三种数据态都能渲染', () => {
   assert.ok(failed.text.includes('boom'));
 });
 
-test('技能门：勾选语义是激活，每行只有一个框', () => {
-  const boxes = checkboxes(renderSkillGate([SKILL_SNAPSHOT, '', false]).tree);
-  assert.equal(boxes.length, 3, '1 总开关 + 2 个技能各 1 个激活框');
-  assert.equal(boxes[0].checked, true, '总开关应勾选');
-  // 默认按名称正序：bundled-helper（已隐藏）在 matlab-code-writing 之前。
-  assert.equal(boxes[1].checked, false, '被隐藏的技能不应勾选');
-  assert.equal(boxes[2].checked, true, '已激活的技能应勾选');
+test('技能门：每行一个下拉菜单，默认值与档位一一对应', () => {
+  const tree = renderSkillGate([SKILL_SNAPSHOT, '', false]).tree;
+  const menus = selects(tree);
+  assert.equal(menus.length, 2, '两个技能各一个下拉菜单（总开关仍是 checkbox，不计入）');
+  assert.equal(checkboxes(tree).length, 1, '只剩总开关一个 checkbox');
+
+  // 默认按名称正序：bundled-helper（hide）在 matlab-code-writing（激活）之前。
+  assert.equal(selectValue(menus[0]), 'hide', '被隐藏的技能应选中 hide');
+  assert.equal(selectValue(menus[1]), 'active', '未设置规则的技能应选中 active');
+
+  // 每个菜单都有四项：激活 + 三档。
+  for (const menu of menus) {
+    const values = optionNodes(menu).map((o) => o.props.value);
+    assert.deepEqual(values, ['active', 'hide', 'name', 'headline']);
+  }
 });
 
-test('技能门：排序只改框内顺序', () => {
-  const asc = checkboxes(renderSkillGate([SKILL_SNAPSHOT, '', false, 'name', false]).tree);
-  const desc = checkboxes(renderSkillGate([SKILL_SNAPSHOT, '', false, 'name', true]).tree);
-  const byState = checkboxes(renderSkillGate([SKILL_SNAPSHOT, '', false, 'state', false]).tree);
-  const activeBoxes = (list) => list.slice(1).map((box) => box.checked);
-  assert.deepEqual(activeBoxes(asc), [false, true], '按名称正序：bundled-helper, matlab-code-writing');
-  assert.deepEqual(activeBoxes(desc), [true, false], '按名称倒序应翻转');
-  assert.deepEqual(activeBoxes(byState), [true, false], '按激活情况：激活的排前');
+test('技能门：排序只改菜单内顺序', () => {
+  const val = (args) => selects(renderSkillGate(args).tree).map(selectValue);
+  assert.deepEqual(val([SKILL_SNAPSHOT, '', false, 'name', false]), ['hide', 'active'], '按名称正序');
+  assert.deepEqual(val([SKILL_SNAPSHOT, '', false, 'name', true]), ['active', 'hide'], '按名称倒序应翻转');
+  // 按状态排序：激活在前（active=0），hide 在后。
+  assert.deepEqual(val([SKILL_SNAPSHOT, '', false, 'state', false]), ['active', 'hide'], '按激活情况：激活的排前');
 });
 
 test('技能门：折叠后不渲染技能行但保留框头', () => {
   const folded = renderSkillGate([SKILL_SNAPSHOT, '', false, 'name', false, { 'user-dsh': true }]);
   assert.equal(checkboxes(folded.tree).length, 1, '折叠后只剩总开关');
+  assert.equal(selects(folded.tree).length, 0, '折叠后不应渲染任何档位菜单');
   assert.ok(folded.text.includes('user-dsh'));
   assert.ok(!folded.text.includes('bundled-helper'), '折叠后不应渲染技能行');
   assert.ok(folded.text.includes('▸'), '折叠时箭头应为 ▸');
