@@ -232,3 +232,34 @@ test('挂载链路：InjectionTuneTab 作为组件节点渲染，钩子独立', 
   const firstHook = source.indexOf('react.useState(readFoldState())');
   assert.ok(firstHook > 0 && firstHook < early, '两个视图 state 必须在早退之前');
 });
+
+test('工具门徽标：后端只给 deniedCount 时也要报出隐藏数（回归）', async () => {
+  // 组件用的是模块闭包里的 react，必须复用 renderPanel 建的那份 seed。
+  const { captured, seed } = renderPanel();
+  // 后端 tool-gate.js snapshot() 的真实形状：有 deniedCount，没有 hiddenCount。
+  const backendJson = {
+    ok: true, enabled: true, budget: 320,
+    groups: [], agents: 0,
+    totals: { count: 76, deniedCount: 41, chars: 1000, tokens: 250, deniedTokens: 120 },
+  };
+
+  const reports = [];
+  globalThis.fetch = () => Promise.resolve({ json: () => Promise.resolve(backendJson) });
+
+  const tree = captured.ToolGateSection({
+    t: (key, params) => (params ? `${key}${JSON.stringify(params)}` : key),
+    styles: captured.STYLES,
+    onStats: (stats) => reports.push(stats),
+  });
+  assert.ok(tree, '工具门组件应能渲染');
+
+  // 触发 useEffect 里的首次 GET，并等 fetch 链跑完。
+  for (const fn of seed.effects.slice()) fn();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(reports.length > 0, true, '首次加载必须回传统计');
+  const last = reports[reports.length - 1];
+  assert.equal(last.error, undefined, '不应报错');
+  assert.equal(last.count, 76, '总数应取 totals.count');
+  assert.equal(last.denied, 41, '隐藏数必须取 totals.deniedCount，而不是恒为 0');
+});

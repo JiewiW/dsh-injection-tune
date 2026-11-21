@@ -37,6 +37,18 @@ DSH 的 agent 每一步都会重新组装请求：runtime-context 快照、技�
 
 规则落在 `~/.dsh/injection-tune/skill-gate.json` 的 `rules` 字段（`{ 技能名: 档位 }`），不在表里的技能即激活。**旧版配置自动迁移**：读到 `version: 1` 的 `deny` + 全局 `mode` 时，会把每个技能按当时的 mode 展开成规则，升级后行为与升级前一致，无需重新配置。
 
+### 统计字段约定
+
+两扇门的 `snapshot()` 各自返回 `totals`，字段名历史上并不统一，改界面读数前先对照本表：
+
+| 字段 | 工具门（`tool-gate.js`） | 技能门（`skill-gate.js`） |
+| --- | --- | --- |
+| `count` | 全部工具数 | 全部技能数 |
+| `deniedCount` | ✅ 已隐藏条数（唯一权威字段） | ✅ 与 `hiddenCount` 同值 |
+| `hiddenCount` | ❌ 不提供 | ✅ 已隐藏条数（旧字段名，为兼容保留） |
+
+界面读取这类统计时用 `deniedCount ?? hiddenCount ?? 0`，不要只读其中一个：两扇门的字段名不同，只读 `hiddenCount` 会让工具门徽标恒为 0（0.6.1 修复的正是这个问题），而只读 `deniedCount` 会在技能门去掉兼容字段后失效。
+
 ## 配置
 
 配置键、默认值与 volatile 语义见设置页和 `lib/config.js`。两扇门的开关与名单在面板里操作，不占配置键。
@@ -55,4 +67,4 @@ node --test
 
 ## 版本
 
-各版本变更见仓库提交记录与 [Releases](https://github.com/JiewiW/dsh-injection-tune/releases)。较近的变化：0.4.2 新增模型切换提示拦截开关（默认关闭）；0.4.3 修复工具注入名单里已停用条目消失的问题；0.5.0 把技能隐藏拆成 hide / name / headline 三档（全局统一档位）；**当前版本 0.6.0** 改为每条技能独立选档、交互从勾选框改为四选一下拉菜单，配置由 v1 自动迁移到 v2。
+各版本变更见仓库提交记录与 [Releases](https://github.com/JiewiW/dsh-injection-tune/releases)。较近的变化：0.4.2 新增模型切换提示拦截开关（默认关闭）；0.4.3 修复工具注入名单里已停用条目消失的问题；0.5.0 把技能隐藏拆成 hide / name / headline 三档（全局统一档位）；0.6.0 改为每条技能独立选档、交互从勾选框改为四选一下拉菜单，配置由 v1 自动迁移到 v2；**当前版本 0.6.1** 修复工具注入名单卡片头徽标恒显示「隐藏 0」的问题。
