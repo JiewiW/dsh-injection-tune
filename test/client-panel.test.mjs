@@ -17,7 +17,7 @@ import fs from 'node:fs';
 const FILE = new URL('../lib/client.js', import.meta.url);
 const source = fs.readFileSync(FILE, 'utf8');
 
-const SECTION_KEYS = ['suppress', 'dedupe', 'skillCatalog', 'instructions', 'toolList', 'skillList'];
+const SECTION_KEYS = ['suppress', 'dedupe', 'skillCatalog', 'instructions', 'toolList', 'skillList', 'orderList'];
 
 /** 假 localStorage：每个用例独立一份，避免互相污染。 */
 function makeStorage(initial) {
@@ -130,18 +130,20 @@ test('模块分成两类并重排：自动精简在前、注入名单在后', ()
   assert.equal(tokens.filter((x) => x === 'catListHint').length, 1);
 });
 
-test('默认全部折叠：6 张卡片 body 都是 display:none，且门面板仍挂载', () => {
+test('默认全部折叠：7 张卡片 body 都是 display:none，且门面板仍挂载', () => {
   const { tree, tokens, captured } = renderPanel();
   const styles = captured.STYLES;
   assert.equal(styles.cardBodyHidden.display, 'none', '折叠态必须是 display:none');
   assert.equal(styles.cardBody.display, 'flex', '展开态必须是 display:flex');
-  assert.equal(countStyle(tree, styles.cardBodyHidden), 6, '默认 6 个模块全部折叠');
+  assert.equal(countStyle(tree, styles.cardBodyHidden), 7, '默认 7 个模块全部折叠');
   assert.equal(countStyle(tree, styles.cardBody), 0, '默认无展开的卡片');
-  assert.ok(tokens.includes('foldState{"n":0,"total":6}'), '顶部应显示已展开 0/6');
+  assert.ok(tokens.includes('foldState{"n":0,"total":7}'), '顶部应显示已展开 0/7');
   const components = findNodes(tree, (n) => typeof n.type === 'function');
-  assert.equal(components.length, 2, '两扇门必须保持挂载，折叠不卸载');
-  for (const node of components) {
-    assert.equal(node.props.embedded, true, '门面板在卡片内不应重复渲染自己的标题框');
+  // 两扇门 + 注入源排序面板：三者都必须在卡片内保持挂载，折叠不卸载。
+  assert.equal(components.length, 3, '两扇门与排序面板必须保持挂载，折叠不卸载');
+  const gates = components.filter((node) => node.props.embedded === true);
+  assert.equal(gates.length, 2, '两扇门都以 embedded 挂载');
+  for (const node of gates) {
     assert.equal(typeof node.props.onStats, 'function', '门面板必须能回传统计给卡片徽标');
   }
 });
@@ -156,7 +158,7 @@ test('顶部总折叠开关：全部展开 / 全部折叠都写回状态与 loca
 
   expand.props.onClick();
   const opened = seed.values[0];
-  assert.equal(Object.keys(opened).length, 6, '全部展开应写入 6 个模块');
+  assert.equal(Object.keys(opened).length, 7, '全部展开应写入 7 个模块');
   assert.ok(SECTION_KEYS.every((key) => opened[key] === true));
   const saved = JSON.parse(storage.map.get('dsh-injection-tune:fold-v1'));
   assert.ok(SECTION_KEYS.every((key) => saved[key] === true), '展开状态应持久化');
@@ -170,8 +172,8 @@ test('逐卡片折叠 + 从 localStorage 恢复', () => {
   const storage = makeStorage({ 'dsh-injection-tune:fold-v1': JSON.stringify({ suppress: true }) });
   const { tree, tokens, captured } = renderPanel({ storage });
   assert.equal(countStyle(tree, captured.STYLES.cardBody), 1, '只恢复展开了 suppress 一张卡片');
-  assert.equal(countStyle(tree, captured.STYLES.cardBodyHidden), 5);
-  assert.ok(tokens.includes('foldState{"n":1,"total":6}'), '计数应反映恢复后的展开数');
+  assert.equal(countStyle(tree, captured.STYLES.cardBodyHidden), 6);
+  assert.ok(tokens.includes('foldState{"n":1,"total":7}'), '计数应反映恢复后的展开数');
 
   // 点击第 2 张卡片头切换折叠：setOpenMap 收到翻转后的 map。
   const { tree: tree2, seed, captured: captured2 } = renderPanel({ storage });
@@ -221,6 +223,97 @@ test('界面标题不再出现 AI-x 代号，中英字典成对', () => {
     const count = (source.match(new RegExp(`(?<![A-Za-z0-9_])${key}:`, 'g')) || []).length;
     assert.equal(count, 2, `${key} 应中英各一处，实际 ${count}`);
   }
+});
+
+test('卡片头展开折叠按钮有亮色底色与边框，各模块格式一致', () => {
+  const { tree, captured } = renderPanel();
+  const s = captured.STYLES;
+  assert.ok(s.cardHead.border && !/none/.test(String(s.cardHead.border)),
+    '卡片头按钮必须有可见边框');
+  assert.ok(s.cardHead.background && !/transparent/.test(String(s.cardHead.background)),
+    '卡片头按钮必须有亮色底色');
+  assert.ok(s.cardArrow.border && s.cardArrow.color,
+    '展开折叠箭头本身也应高亮，便于看清');
+  // 每张卡片都用一个 cardHead 按钮作为展开折叠入口。
+  const heads = findNodes(tree, (n) => n.type === 'button' && n.props && n.props.style === s.cardHead);
+  assert.equal(heads.length, 7, '7 个模块都应有同款的展开折叠按钮');
+});
+
+test('界面全部文案与注释无 AI- 代号残留', () => {
+  assert.ok(!/AI-\d/.test(source), '源码中不应残留 AI-1/AI-4 等内部代号');
+});
+
+test('注入源管理新增能力中英字典成对：展开/编辑/恢复默认/隐藏', () => {
+  for (const key of [
+    'orderHideHint', 'orderExpand', 'orderCollapse', 'orderResetOne',
+    'orderResetAll', 'orderEdited', 'orderFullText', 'orderEdit',
+    'orderCancelEdit', 'orderEmptyText',
+  ]) {
+    const count = (source.match(new RegExp(`(?<![A-Za-z0-9_])${key}:`, 'g')) || []).length;
+    assert.equal(count, 2, `${key} 应中英各一处，实际 ${count}`);
+  }
+});
+
+test('注入源排序面板渲染全文、展开/折叠、编辑、隐藏复选框', () => {
+  // 直接渲染 InjectOrderSection：按 useState/useRef 调用顺序喂入快照与草案。
+  let captured = null;
+  const data = {
+    ok: true,
+    sections: [{ name: 'sec-a', order: 0, text: 'FULL SECTION TEXT', summary: 'FULL SECTION TEXT', overridden: false, hidden: false }],
+    contexts: [{ name: 'ctx-a', order: 0, text: 'CTX FULL TEXT', summary: 'CTX FULL TEXT', overridden: false, hidden: false }],
+    capturedAt: 0,
+  };
+  const draft = {
+    sections: ['sec-a'], contexts: ['ctx-a'],
+    texts: { 'sec-a': 'FULL SECTION TEXT', 'ctx-a': 'CTX FULL TEXT' },
+    hidden: { 'sec-a': false, 'ctx-a': true }, edits: {}, reset: [],
+  };
+  // 槽序（useRef 不消耗 useState 槽位）：0 data / 1 err / 2 busy / 3 status / 4 draft / 5 expanded / 6 editing
+  const seed = { values: [data, '', false, '', draft, {}, {}], cursor: 0, effects: [] };
+  const react = makeReact(seed);
+  const requireStub = (id) => {
+    if (id === 'react') return react;
+    if (id === '@deepseek-ai/dsh-client-ui-primitives') return {};
+    throw new Error(`unexpected require: ${id}`);
+  };
+  globalThis.window = {
+    __ModuleLoader__: { load({ factory }) { captured = factory(requireStub); } },
+  };
+  new Function(source)();
+  const t = (key, params) => (params ? `${key}${JSON.stringify(params)}` : key);
+  const styles = captured.STYLES;
+  const tree = captured.InjectOrderSection({ t, styles });
+
+  // 两条注入项各一个激活复选框，其中隐藏项 unchecked。
+  const checkboxes = findNodes(tree, (n) => n.type === 'input' && n.props.type === 'checkbox');
+  assert.equal(checkboxes.length, 2, '每条注入项都应有激活/隐藏复选框');
+  assert.equal(checkboxes[0].props.checked, true, '未隐藏项复选框应为选中');
+  assert.equal(checkboxes[1].props.checked, false, '隐藏项复选框应为未选中');
+
+  const tokens = tokensOf(tree);
+  assert.ok(tokens.includes('orderResetAll'), '应有全部恢复默认按钮');
+
+  // 展开/上移/下移按钮用 title 暴露文案，逐一定位。
+  const expandBtns = findNodes(tree, (n) => n.type === 'button' && n.props.title === 'orderExpand');
+  const upBtns = findNodes(tree, (n) => n.type === 'button' && n.props.title === 'orderUp');
+  const downBtns = findNodes(tree, (n) => n.type === 'button' && n.props.title === 'orderDown');
+  assert.ok(upBtns.length > 0 && downBtns.length > 0, '上下移按钮仍在');
+  assert.equal(expandBtns.length, 2, '每项一个展开按钮');
+  expandBtns[0].props.onClick();
+  const nextExpanded = typeof seed.values[5] === 'function' ? seed.values[5]({}) : seed.values[5];
+  assert.equal(nextExpanded['sections:sec-a'], true, '点击展开应记录该行展开态');
+
+  assert.ok(styles.orderPre && styles.orderTextarea && styles.orderRowHidden,
+    '样式表应含全文展示、编辑框、隐藏态三套样式');
+});
+
+test('设置页注册为一级独立页面 settings.section，不再挂在内置插件页签下', () => {
+  assert.ok(source.includes("ctx.slots.inject(\n                'settings.section'"),
+    '必须注册到 settings.section 一级导航槽位');
+  assert.ok(!/slots\.inject\(\s*['"]settings\.plugins\.tab['"]/.test(source),
+    '不应再注册到 settings.plugins.tab（内置插件页内标签）');
+  assert.ok(source.includes("name: 'settings.section'"), '注册的槽位名必须是 settings.section');
+  assert.ok(/id: 'injection-tune'/.test(source), '独立页面 id 应保持 injection-tune');
 });
 
 test('挂载链路：InjectionTuneTab 作为组件节点渲染，钩子独立', () => {
