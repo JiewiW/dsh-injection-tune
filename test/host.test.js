@@ -255,3 +255,56 @@ test('模型切换提示拦截：历史提示不再随 deriveMessages 进入请�
   dispose();
   assert.deepEqual(session.deriveMessages(), [user, notice], '卸载后纯透传');
 });
+
+test('模型切换提示拦截：落盘前吞掉 notice，界面与请求侧同时干净', async () => {
+  const notice = { role: 'user', content: [], source: { kind: 'model-selection', form: 'notice' } };
+  const other = { role: 'user', content: [], source: { kind: 'plugin:other', form: 'notice' } };
+  const saved = [];
+  const session = {
+    deriveMessages() { return []; },
+    append(...args) { saved.push(args); return { seq: saved.length }; },
+  };
+  const outcome = { kind: 'enter', messages: [] };
+
+  const { ctx, listeners } = fakeCtx();
+  const dispose = host.apply(ctx, resolveConfig({ suppressModelSelectionNotice: true }));
+  await listeners[0].handler({ agent: { session }, ...outcome }, async () => outcome);
+
+  assert.equal(session.append('user/message', notice), undefined, 'notice 被吞，返回 undefined');
+  assert.equal(saved.length, 0, 'notice 不应进入会话事件流（界面即不再显示）');
+  session.append('user/message', other);
+  assert.equal(saved.length, 1, '其他来源的 notice 照常落盘');
+  session.append('assistant/message', { role: 'assistant', content: [] });
+  assert.equal(saved.length, 2, '其他事件类型照常落盘');
+
+  // 批量形式：只滤掉 notice 成员，其余保留。
+  saved.length = 0;
+  session.append([['user/message', notice], ['user/message', other]]);
+  assert.equal(saved.length, 1, '批量形式也应过滤 notice');
+  assert.equal(saved[0][0][0][1], other, '批量里保留非 notice 成员');
+  saved.length = 0;
+  session.append([['user/message', notice]]);
+  assert.equal(saved.length, 0, '批量全被吞时不下发');
+
+  dispose();
+  saved.length = 0;
+  session.append('user/message', notice);
+  assert.equal(saved.length, 1, '卸载后恢复透传');
+});
+
+test('模型切换提示拦截：关闭开关时 notice 照常落盘', async () => {
+  const notice = { role: 'user', content: [], source: { kind: 'model-selection', form: 'notice' } };
+  const saved = [];
+  const session = {
+    deriveMessages() { return []; },
+    append(...args) { saved.push(args); },
+  };
+  const outcome = { kind: 'enter', messages: [] };
+
+  const { ctx, listeners } = fakeCtx();
+  const dispose = host.apply(ctx, resolveConfig({}));
+  await listeners[0].handler({ agent: { session }, ...outcome }, async () => outcome);
+  session.append('user/message', notice);
+  assert.equal(saved.length, 1, '默认关闭：notice 正常落盘');
+  dispose();
+});

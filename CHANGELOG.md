@@ -2,6 +2,24 @@
 
 本文件记录 dsh-injection-tune 的版本变更。历史版本（0.6.0 及以前）的详细说明见仓库提交记录与 [Releases](https://github.com/JiewiW/dsh-injection-tune/releases)。
 
+## 0.6.3
+
+### 修复
+
+- **「模型切换提示」开关失效：勾选后界面仍显示 `[model changed: …]`**（升级到 dsh 0.2.2-rc.5 后暴露）。
+  - 原因：Web GUI 的消息列表**直接由会话事件流渲染**，客户端 bundle 零引用 `deriveMessages`；而 0.6.2 及以前只包装 `session.deriveMessages` 过滤**请求侧**，所以模型看不到这条提示了，界面却照常显示。内核 `dsh-agent-loop` 会把 pre-step 返回的 `decision.messages` 逐条 `session.append("user/message", …)` 落盘，一旦进日志就成了会话的永久组成部分。
+  - 修复：新增 `instrumentSessionAppend()` 层，在落盘**之前**吞掉 `source.kind === 'model-selection' && form === 'notice'` 的 `user/message`，界面与请求侧同时干净。内核所有 `user/message` 的 `append` 调用点均不使用返回值，因此被吞时返回 `undefined` 安全；批量形式按成员过滤，全部被吞时返回 `[]`。
+  - 与原有 `deriveMessages` 层的分工：新层拦**新产生**的提示不落盘，旧层拦**升级前已落盘**的历史提示不随请求重发，两层互不替代。
+
+### 测试
+
+- 新增 2 项回归用例（`test/host.test.js`）：落盘前吞掉 notice（含批量形式与卸载后恢复透传）、关闭开关时 notice 照常落盘。
+- 全量 `node --test`：69/69 通过。
+
+## 0.6.2
+
+- 新增「注入源管理」：可对 system prompt 的具名 section / context 做排序、编辑与隐藏，并配独立设置页（`lib/inject-order.js`）。
+
 ## 0.6.1
 
 ### 修复
